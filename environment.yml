@@ -3,7 +3,9 @@ channels:
   - conda-forge
 dependencies:
   - altair==2.4.1
+  - ipython=5.8.0
   - ipywidgets=7.4.2
+  - jsonschema=2.6.0
   - matplotlib=2.2.3
   - notebook=5.7.4
   - numpy=1.15.4
