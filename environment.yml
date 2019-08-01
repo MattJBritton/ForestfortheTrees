@@ -277,9 +277,6 @@ dependencies:
     - correlation-pearson==0.0.1
     - cymem==2.0.2
     - dill==0.2.9
-    - dlib==19.16.0
-    - face-recognition==1.2.3
-    - face-recognition-models==0.3.0
     - jmespath==0.9.4
     - libarchive-c==2.8
     - lief==0.9.0
