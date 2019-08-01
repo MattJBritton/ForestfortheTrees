@@ -1072,7 +1072,7 @@ class ForestForTheTrees:
             
             tooltip_encoding = [
                 alt.Tooltip('h_indices:O', title = key[0]),
-                alt.Tooltip('v_indices:O', title = key[1]),
+                alt.Tooltip('v_indices:O', title = key[1] if key[1] != key[0] else "same"),
                 alt.Tooltip("contributions:Q", title = "Contribution")
             ]
 
