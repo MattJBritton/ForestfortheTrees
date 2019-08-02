@@ -17,7 +17,7 @@ from sklearn.metrics import r2_score, mean_absolute_error
 
 import altair as alt
 #alt.renderers.enable("notebook")
-from IPython.display import display, HTML
+from IPython.display import display
 
 #seed for reproducibility
 np.random.seed = 15
@@ -112,7 +112,7 @@ class ForestForTheTrees:
                 "windspeed":"Wind Speed"
             }
             dataLoad = dataLoad.rename(mapper=feature_names_dict,axis=1) 
-            features = feature_names_dict.values()
+            features = list(feature_names_dict.values())
 
             return {
                 "x": dataLoad[features].values,
@@ -298,10 +298,12 @@ class ForestForTheTrees:
             self.predictions_base +\
             np.sum(
                 np.array(
-                    self._get_prediction_contributions_by_key(
-                        components,
-                        explanation
-                    ).values()
+                    list(
+                        self._get_prediction_contributions_by_key(
+                            components,
+                            explanation
+                        ).values()
+                    )
                 ), 
                 axis = 0
             ).reshape(-1,1),
@@ -415,7 +417,7 @@ class ForestForTheTrees:
 
     def rollup_components(self, explanation):
         temp_outputs = self.copy_chart_components()
-        for keyRollup in [k for k in self.chart_components.iterkeys() if k not in explanation]:
+        for keyRollup in [k for k in self.chart_components.keys() if k not in explanation]:
             hUsed = False
             vUsed = False
             for keyExisting in explanation:
@@ -473,12 +475,12 @@ class ForestForTheTrees:
         
         if print_function_text:
             if len(function_texts) == 1:
-                for x in [x for x in function_texts.values()[0]["function_texts"]]:
-                    print x
+                for x in [x for x in list(function_texts.values())[0]["function_texts"]]:
+                    print(x)
             else:
-                for x in [x["function_texts"] for x in function_texts.values()]:
+                for x in [x["function_texts"] for x in list(function_texts.values())]:
                     for text in x:
-                        print x[0]
+                        print(x[0])
         chart = self._visualize_components(
             chart_components.keys(),
             chart_components,
@@ -564,7 +566,7 @@ class ForestForTheTrees:
             for key in self.get_feature_pairs()
         }      
 
-        for key, value in feature_pairs.iteritems():
+        for key, value in feature_pairs.items():
             h, v = self.get_quantile_matrix(key[0], key[1])
             value["map"] = np.array(
                 [
@@ -674,7 +676,7 @@ class ForestForTheTrees:
                         )
 
         #now calculate output array for each feature pair
-        for key, value in feature_pairs.iteritems():
+        for key, value in feature_pairs.items():
             arrs = []
             for predicate in value["predicates"]:
                 f = np.vectorize(predicate)
@@ -687,7 +689,7 @@ class ForestForTheTrees:
                 value["output"] = None
 
         #build chart data
-        for key, value in feature_pairs.iteritems():
+        for key, value in feature_pairs.items():
             h,v = self.get_quantile_matrix(key[0], key[1])
             value["h_indices"] = h
             value["v_indices"] = v    
@@ -695,7 +697,7 @@ class ForestForTheTrees:
         no_predictor_features = []
         oned_features = []
         chart_data = {}
-        for key, value in feature_pairs.iteritems(): 
+        for key, value in feature_pairs.items(): 
             newKey = key
             if value["output"] is None:
                 no_predictor_features.append(key)
@@ -721,12 +723,12 @@ class ForestForTheTrees:
 
         #do another loop through chart_data to push 1d charts into 2d
         if collapse_1d:
-            for value in feature_pairs.itervalues():
+            for value in list(feature_pairs.values()):
                 if value["v_indices"] is None:
                     key = value["1d_key"]
                     #get list of charts with this feature
                     matchList = sorted([{"key": kInner, "feature_importance": np.std(vInner["output"])}\
-                                        for kInner, vInner in feature_pairs.iteritems()\
+                                        for kInner, vInner in feature_pairs.items()\
                                         if "removed" not in vInner and key in kInner],\
                                        key=lambda x: x["feature_importance"], reverse=True)
 
@@ -739,7 +741,7 @@ class ForestForTheTrees:
                                                  )
 
         #one last loop to generate the horizontal and vertical components
-        for key, value in feature_pairs.iteritems():
+        for key, value in feature_pairs.items():
             if "removed" in value:
                 pass
             else:
@@ -751,7 +753,7 @@ class ForestForTheTrees:
                 .reshape(-1,1)
 
         #remove deleted keys
-        feature_pairs = {key:val for key, val in feature_pairs.iteritems() if "removed" not in val}
+        feature_pairs = {key:val for key, val in feature_pairs.items() if "removed" not in val}
         feature_pairs = OrderedDict(sorted(feature_pairs.items(),\
                                             key=lambda x: np.std(x[1]["output"]), reverse=True))
         chart_components = {
@@ -761,20 +763,20 @@ class ForestForTheTrees:
                 "output_H" : val["output_H"],
                 "output_HReduced" : val["output_HReduced"],
                 "output_V" : val["output_V"]
-            } for key, val in feature_pairs.iteritems()
+            } for key, val in feature_pairs.items()
         }
 
         chart_indices = {
             key: {
                 "h_indices" : val["h_indices"],
                 "v_indices" : val["v_indices"]
-            } for key, val in feature_pairs.iteritems()
+            } for key, val in feature_pairs.items()
         }
         
         function_texts = {
             key : {
                 "function_texts" : val["function_texts"]
-            } for key, val in feature_pairs.iteritems()
+            } for key, val in feature_pairs.items()
         } if return_text else None
         
         return chart_components, chart_indices, no_predictor_features, oned_features, function_texts
@@ -796,7 +798,7 @@ class ForestForTheTrees:
         and len(explanation) < len(self.chart_components):
             current_details = {}
             temp_outputs = {}
-            keys_to_evaluate = [key for key in self.chart_components.iterkeys() if key not in explanation]
+            keys_to_evaluate = [key for key in self.chart_components.keys() if key not in explanation]
             for key in keys_to_evaluate:
                 #roll up other keys
                 current_explanation = explanation+[key]
@@ -812,7 +814,7 @@ class ForestForTheTrees:
 
             #get key with highest fidelity score
             best_key = max(
-                current_details.iterkeys(),\
+                current_details.keys(),\
                 key = (lambda key: current_details[key])
             )
             explanation.append(best_key)
@@ -830,7 +832,7 @@ class ForestForTheTrees:
             current_details["score"] = current_details[best_key]
             evaluation_details.append(current_details)
             explanation_components = {k : self._drop_alternate_outputs(v)\
-                                      for k, v in temp_outputs[best_key].iteritems()}
+                                      for k, v in temp_outputs[best_key].items()}
         return explanation, explanation_components, evaluation_details
     
     def explain(self, fidelity_threshold = 1., rollup = None):
@@ -859,8 +861,8 @@ class ForestForTheTrees:
             
         if save_to_file:
             for x in self.cache["play_components"]:
-                for comp_key, component in x["components"].iteritems():
-                    x["components"][comp_key] = {key:val for key,val in component.iteritems() if key == "output"}            
+                for comp_key, component in x["components"].items():
+                    x["components"][comp_key] = {key:val for key,val in component.items() if key == "output"}            
             with open('notebook_resources/cache_play_components.pkl', 'wb') as save_file:
                 pickle.dump(self.cache["play_components"], save_file, -1)
         
@@ -891,7 +893,7 @@ class ForestForTheTrees:
             pass
         try:
             with open('notebook_resources/cache_play_components.pkl', "rb") as input_file:
-                self.cache["play_components"] = pickle.load(input_file)        
+                self.cache["play_components"] = pickle.load(input_file, encoding='latin1')        
         except:
             pass
             
@@ -1069,8 +1071,8 @@ class ForestForTheTrees:
                 scale = alt.Scale(
                     scheme = "redblue",
                     domain = [
-                        np.min([np.min(x["output"]) for x in self.explanation_components.values()]),
-                        np.max([np.max(x["output"]) for x in self.explanation_components.values()])
+                        np.min([np.min(x["output"]) for x in list(self.explanation_components.values())]),
+                        np.max([np.max(x["output"]) for x in list(self.explanation_components.values())])
                     ]
                 ),
                 legend = alt.Legend(title = "Votes")
