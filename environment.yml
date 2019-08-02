@@ -18,7 +18,6 @@ dependencies:
   - six=1.12.0
   - toolz=0.9.0
   - typing=3.6.6
-  - widgetsnbextension=3.5  
   - vega==1.4.0
 prefix: /anaconda2
 
