@@ -16,7 +16,7 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_absolute_error
 
 import altair as alt
-alt.renderers.enable("notebook")
+#alt.renderers.enable("notebook")
 from IPython.display import display, HTML
 
 #seed for reproducibility
