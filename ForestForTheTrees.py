@@ -885,10 +885,16 @@ class ForestForTheTrees:
             self.cache["datapoints"].to_csv("notebook_resources/cache_visualize_datapoints.csv")
             
     def load_cache_from_file(self):
-        self.cache["datapoints"] = pd.read_csv("notebook_resources/cache_visualize_datapoints.csv")
-        with open('notebook_resources/cache_play_components.pkl', "rb") as input_file:
-            self.cache["play_components"] = pickle.load(input_file)        
-        
+        try:
+            self.cache["datapoints"] = pd.read_csv("notebook_resources/cache_visualize_datapoints.csv")
+        except:
+            pass
+        try:
+            with open('notebook_resources/cache_play_components.pkl', "rb") as input_file:
+                self.cache["play_components"] = pickle.load(input_file)        
+        except:
+            pass
+            
     def visualize_datapoints(self, cumulative = False, num_datapoints = 50, explanation_type = "minimal",
                             color_encoding = "prediction", auto_display = True):
         output = self._visualize_datapoints(explanation_type, cumulative, num_datapoints, color_encoding)
