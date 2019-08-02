@@ -37,7 +37,7 @@ dependencies:
   - libopenblas=0.3.6
   - libpng=1.6.37
   - libsodium=1.0.17
-  - llvm-openmp=4.0.1
+#  - llvm-openmp=4.0.1
   - markupsafe=1.1.1
   - matplotlib=3.1.1
   - matplotlib-base=3.1.1
