@@ -39,11 +39,11 @@ dependencies:
   # - libsodium=1.0.17
 #  - llvm-openmp=4.0.1
   # - markupsafe=1.1.1
-  # - matplotlib=3.1.1
-  # - matplotlib-base=3.1.1
+  - matplotlib=3.1.1
+  - matplotlib-base=3.1.1
   # - mistune=0.8.4
   - nbconvert=5.5.0
-  - nbformat=4.4.0
+  # - nbformat=4.4.0
   # - ncurses=6.1
   # - nodejs=12.3.0
   - notebook=6.0.0
@@ -82,8 +82,8 @@ dependencies:
   # - vega_datasets=0.7.0
   # - wcwidth=0.1.7
   # - webencodings=0.5.1
-  - wheel=0.33.4
-  - widgetsnbextension=3.5.1
+  # - wheel=0.33.4
+  # - widgetsnbextension=3.5.1
   # - xz=5.2.4
   # - zeromq=4.3.2
   # - zlib=1.2.11

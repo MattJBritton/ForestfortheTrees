@@ -1,5 +1,5 @@
 #imports
-from __future__ import division
+#from __future__ import division
 import time
 import datetime
 import copy
@@ -11,7 +11,6 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from sklearn import datasets
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_absolute_error
 
