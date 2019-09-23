@@ -52,7 +52,7 @@ f2t.explain(
     fidelity_threshold = .95
 )
 ```
-![5-chart explanation for bike dataset](https://github.com/MattJBritton/ForestfortheTrees/readme_resources/5_chart_explanation.png "5 chart explanation for bike dataset")
+![5-chart explanation for bike dataset](https://github.com/MattJBritton/ForestfortheTrees/blob/master/readme_resources/5_chart_explanation.png "5 chart explanation for bike dataset")
 
 ## Development
 This library is under active development - please review the [Issues](https://github.com/MattJBritton/ForestfortheTrees/issues) tab for current priorities. Feature requests and bug reports are welcomed! If you find this library useful, please feel free to message me and let me know how it went. 
