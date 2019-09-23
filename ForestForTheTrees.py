@@ -13,9 +13,11 @@ import pandas as pd
 
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_absolute_error
+from sklearn.utils.validation import check_is_fitted
+from sklearn.exceptions import NotFittedError
 
 import altair as alt
-#alt.renderers.enable("notebook")
+alt.renderers.enable("default")
 from IPython.display import display
 
 #seed for reproducibility
@@ -23,40 +25,53 @@ np.random.seed = 15
 
 class ForestForTheTrees:
     
-    DEFAULT_LEARNING_RATE = 1.
-    
-    def __init__(self):
+    ALLOWED_REGRESSION_ERROR_METRICS = ["r_squared", "mae"]  
         
-        self.dataset = None
-        self.x = None
-        self.y = None
-        self.feature_names = None
-        self.feature_locs = None
-        self.feature_ranges = {}
-        self.target_type = None
-        self.classifier_type = None
-        self.classifier = None
-        self.mean_prediction = None
-        self.no_predictor_features = []
-        self.oned_features = []   
-        self.binned_data = None
-        self.sample_size = None
-        self.num_tiles = None
-        self.quantiles = None
-        self.learning_rate = self.DEFAULT_LEARNING_RATE
-        self.predictions_base = None
-        self.chart_components = {}
-        self.explanation_components = {}
-        self.base_explanation = []
-        self.evaluation_details = []
-        self.base_components = []
-        self.explanation = []
-        self.cache = {}
+    def __init__(
+        self, 
+        dataset, 
+        model, 
+        target_col, 
+        task = "Regression", 
+        sample_size = None, 
+        num_tiles = 40, 
+        quantiles = False
+    ):
         
-    def __init__(self, dataset, sample_size, num_tiles, quantiles, learning_rate):
+        """ Initialize an instance with a dataset, model, target, task, and other parameters
         
-        self.classifier_type = None
-        self.classifier = None
+            Generates an internal data representation from the dataframe, fits the model if not done already,
+            initializes default variables, and raises errors if bad arguments are passed.
+            
+            --Arguments
+            dataset (pd.DataFrame or string):
+                If DataFrame, the whole dataset with predictor and target features
+                If String, the name of one of the sample datasets in get_sample_dataset
+            model (sklearn.GradientBoostingRegressor or None)
+                Model to explain. If None, initialize and fit model with default hyperparameters
+            target_col (String):
+                Column name found in dataset.columns. Value to be predicted
+            task (String):
+                "Regression" is the only task currently supported
+            sample_size (Integer or None):
+                For large datasets, select a number of datapoints to randomly sample (without replacement)
+                when evaluating explanation components. If none, use the whole dataset.
+            num_tiles (Integer):
+                For quantitative features, the number of bins into which the feature range is divided,
+                and therefore also the number of squares in the heatmap for that feature.
+                Bounds the max size of a single component heatmap at num_tiles^2.
+                Higher numbers result in more accurate explanations at the cost of slower running time.
+            quantiles (Boolean):
+                If true, divide feature range into num_tiles bins of equal numbers of datapoints, rather than equal size.
+                
+            --Returns
+            None
+        """
+        
+        #initialize variables
+        self.model = model
+        self.target_col = target_col
+        self.task = task
         self.mean_prediction = None
         self.no_predictor_features = []
         self.oned_features = []   
@@ -64,7 +79,6 @@ class ForestForTheTrees:
         self.sample_size = sample_size #may be set to none here, will be handled in load_dataset()
         self.num_tiles = num_tiles
         self.quantiles = quantiles
-        self.learning_rate = learning_rate
         self.predictions_base = None
         self.chart_components = {}
         self.explanation_components = {}
@@ -73,14 +87,61 @@ class ForestForTheTrees:
         self.base_components = []
         self.explanation = []
         self.cache = {}
-        self.load_dataset(dataset)
+
+        #get sample dataset if string passed
+        if isinstance(dataset, str):
+            dataset = ForestForTheTrees.get_sample_dataset(dataset)
+        elif not isinstance(dataset, pd.DataFrame):
+            raise ValueError(f"Invalid type {type(dataset)} passed for dataset argument. Please provide "\
+                            + "a DataFrame or a string if using one of the sample datasets.")
         
-    def set_sample_size(self, new_size):
-        self.sample_size = new_size
+        #generate internal data representation
+        features = [x for x in dataset.columns if x != self.target_col]
+        self.x = dataset.loc[:,features].values
+        self.y = dataset.loc[:,target_col]
+        self.feature_names = features
+        self.feature_locs = {x:i for i,x in enumerate(features)}
+        self.feature_ranges = {
+            feature : self._get_quantiles(feature)
+            for feature in self.feature_names
+        } 
+        if self.sample_size is None: #if no sample size use whole dataset
+            self.sample_size = self.x.shape[0]
+        self.binned_data = self._bin_data() 
+        
+        #if no model passed, instantiate one with default settings
+        if self.model is None:
+            if self.task == "Regression":
+                self.model = GradientBoostingRegressor(
+                    n_estimators = 300, 
+                    max_depth = 2, 
+                    learning_rate = 1.
+                )                
+            else:
+                raise NotImplementedError("Regression is the only task currently implemented.")
+                
+        #now handle models which are not yet fitted
+        #the ideal scenario is that models are passed already fitted according to appropriate train/test split
+        #so this is provided primarily as a convenience
+        try:
+            if check_is_fitted(self.model, "tree_", "OK") == "OK":
+                pass
+            else:
+                self.model.fit(self.x, self.y)
+        except NotFittedError:
+            self.model.fit(self.x, self.y)
+        
+        #all models should be fitted at this point
+        self.pred_y = self.model.predict(self.x)
     
-    def get_dataset(self, dataset):
+    def get_sample_dataset(dataset_name):
         
-        if dataset == "bike":
+        """Return dataframe of sample dataset"""
+        
+        if dataset_name != "bike":
+            raise NotImplementedError("The only dataset currently available is the bike dataset.")
+        
+        if dataset_name == "bike":
             def _datestr_to_timestamp(s):
                 return time.mktime(datetime.datetime.strptime(s, "%Y-%m-%d").timetuple())
 
@@ -110,25 +171,24 @@ class ForestForTheTrees:
                 "hum":"Humidity",
                 "windspeed":"Wind Speed"
             }
+            dataLoad = dataLoad.rename({"cnt" : "Ridership"}, axis = 1)
             dataLoad = dataLoad.rename(mapper=feature_names_dict,axis=1) 
-            features = list(feature_names_dict.values())
+            return dataLoad.loc[:, list(feature_names_dict.values()) + ["Ridership"]]
+        
+    def return_dataset_as_dataframe(self):
+        """Construct dataframe from internal NumPy data representation"""
+        return pd.DataFrame(data = np.hstack(self.x, self.y), columns = features + [target_col])
 
-            return {
-                "x": dataLoad[features].values,
-                "y": dataLoad["cnt"],
-                "feature_names": features,
-                "feature_locs": {x:i for i,x in enumerate(features)},
-                "target_type": "regression"
-            }
-
-    def bin_data(self):
+    def _bin_data(self):
+    
+        """For each pair of features in the dataset, generate an array of bin values in an X/Y grid."""
     
         prediction_contributions = {}
         sample_data = pd.DataFrame(
-            self.get_sample(self.x),
+            self._get_sample(self.x),
             columns = self.feature_names
         )
-        for key in self.get_feature_pairs():
+        for key in self._get_feature_pairs():
             tempH = np.digitize(
                 sample_data.loc[:,key[0]],
                 self.feature_ranges[key[0]]
@@ -138,40 +198,7 @@ class ForestForTheTrees:
                 self.feature_ranges[key[1]]
             )-1.
             prediction_contributions[key] = (tempV*len(self.feature_ranges[key[0]]) + tempH).astype(int)
-        return prediction_contributions        
-        
-    def load_dataset(self, dataset):
-
-        self.dataset = dataset
-        data = self.get_dataset(self.dataset)
-        self.x = data["x"]
-        self.y = data["y"]
-        self.feature_names = data["feature_names"]
-        self.feature_locs = data["feature_locs"]
-        self.target_type = data["target_type"]
-        self.feature_ranges = {
-            feature : self.get_quantiles(feature)
-            for feature in self.feature_names
-        } 
-        if self.sample_size is None:
-            self.sample_size = self.x.shape[0]
-        self.binned_data = self.bin_data()    
-            
-    def build_base_model(self, num_estimators):
-
-        self.model_type = "regression"
-        self.classifier_type = GradientBoostingRegressor
-
-        self.model = self.classifier_type(
-            n_estimators=num_estimators, 
-            max_depth=2, 
-            learning_rate = self.learning_rate
-        )
-        self.model.fit(self.x, self.y)
-        self.pred_y = self.model.predict(self.x)
-
-    def get_model_accuracy(self):
-        return r2_score(self.y, self.pred_y)    
+        return prediction_contributions            
         
     def _get_coordinate_matrix(self, lst, length, direction):
         if direction=="h":
@@ -180,7 +207,7 @@ class ForestForTheTrees:
             return [item for item in lst\
              for i in range(length)]   
 
-    def get_quantile_matrix(self, feat1, feat2):
+    def _get_quantile_matrix(self, feat1, feat2):
         h = self._get_coordinate_matrix(
             list(self.feature_ranges[feat1]),
             len(self.feature_ranges[feat2]),
@@ -193,11 +220,11 @@ class ForestForTheTrees:
         )                      
         return h,v 
 
-    def get_leaf_value(self, tree, node_position):
+    def _get_leaf_value(self, tree, node_position):
         node = tree.value[node_position]
         return node        
 
-    def get_feature_pair_key(self, feat1, feat2):
+    def _get_feature_pair_key(self, feat1, feat2):
         if self.feature_ranges[feat1].shape[0] == self.feature_ranges[feat2].shape[0]:
             #need stable order so keys with same number of quantiles appear in only one order
             return tuple(sorted([feat1, feat2]))
@@ -206,7 +233,7 @@ class ForestForTheTrees:
         else:
             return tuple([feat2, feat1])        
 
-    def get_quantiles(self, feat):
+    def _get_quantiles(self, feat):
         loc = self.feature_locs[feat]
         if np.unique(self.x[:,loc]).shape[0] < 30 or type(self.x[0,loc]) is str: #is categorical/ordinal?
             return np.unique(self.x[:,loc])
@@ -229,33 +256,33 @@ class ForestForTheTrees:
                     )
                     ,1)  
             
-    def reduce_to_1d(self, arr, threshold, direction):
+    def _reduce_to_1d(self, arr, threshold, direction):
         if direction == "h":
             reduced_arr = arr - arr[:,0].reshape(-1,1)
         else:
             reduced_arr = arr - arr[0,:].reshape(1,-1)
         return (np.max(np.abs(reduced_arr))/np.max(np.abs(arr))) <= threshold               
         
-    def get_sample(self, arr):
+    def _get_sample(self, arr):
         return arr[:self.sample_size]
     
-    def get_predictions_base(self):
+    def _get_predictions_base(self):
         return np.full((self.sample_size,1), np.mean(self.y))
     
-    def get_empty_sample(self, size = None):
+    def _get_empty_sample(self, size = None):
         return np.full((self.sample_size if size is None else size,1), 0)
     
-    def get_explanation_accuracy(self, explanation_predictions, error_metric):
+    def _get_explanation_accuracy(self, explanation_predictions, error_metric):
         if error_metric == "r_squared":
             func = r2_score
         elif error_metric == "mae":
             func = mean_absolute_error
-        return func(self.get_sample(self.pred_y), explanation_predictions)
+        return func(self._get_sample(self.pred_y), explanation_predictions)
         
-    def get_prediction_contributions(self, chart, data_positions):
+    def _get_prediction_contributions(self, chart, data_positions):
         return np.take(chart, data_positions)
     
-    def sum_arrays(self, temp_outputs, keyMain, keyAdd, arr_to_add):
+    def _sum_arrays(self, temp_outputs, keyMain, keyAdd, arr_to_add):
         return temp_outputs[keyMain]["output"]\
     + temp_outputs[keyAdd][arr_to_add].reshape(
             temp_outputs[keyMain]["output"].shape[0]
@@ -270,7 +297,7 @@ class ForestForTheTrees:
         return np.hstack(
             tuple(
                 [
-                    self.get_prediction_contributions(
+                    self._get_prediction_contributions(
                         components[expKey]["output"],
                         self.binned_data[expKey]
                     ).reshape(-1, 1)\
@@ -279,26 +306,33 @@ class ForestForTheTrees:
             )
         )
     
-    def _get_prediction_contributions_by_key(self, components, explanation):
+    def get_prediction_contributions_by_key(self, components, explanation):
         return {
             expKey : 
-            self.get_prediction_contributions(
+            self._get_prediction_contributions(
                 components[expKey]["output"],
                 self.binned_data[expKey]
             ) for expKey in explanation
         }
     
     def evaluate_explanation(self, error_metric = "r_squared"):
-        return self._evaluate_single_explanation(self.chart_components, self.explanation, error_metric)
+        if self.task == "Regression":
+            if error_metric in self.ALLOWED_REGRESSION_ERROR_METRICS: 
+                return self._evaluate_single_explanation(self.chart_components, self.explanation, error_metric)
+            else:
+                raise ValueError(f"Not an allowed error metric for {self.task}. Try one of"\
+                + f"{self.ALLOWED_REGRESSION_ERROR_METRICS}.")
+        elif self.task == "Classification":
+            raise NotImplementedError("Classification not yet implemented.")
 
     def _evaluate_single_explanation(self, components, explanation, error_metric):
         
-        return self.get_explanation_accuracy(
+        return self._get_explanation_accuracy(
             self.predictions_base +\
             np.sum(
                 np.array(
                     list(
-                        self._get_prediction_contributions_by_key(
+                        self.get_prediction_contributions_by_key(
                             components,
                             explanation
                         ).values()
@@ -326,9 +360,9 @@ class ForestForTheTrees:
         #raw contributions
         arr = np.hstack(
             (
-                self.get_empty_sample().reshape(-1,1),
+                self._get_empty_sample().reshape(-1,1),
                 contributions.reshape(self.sample_size, -1),
-                self.get_sample(self.pred_y).reshape(-1,1),
+                self._get_sample(self.pred_y).reshape(-1,1),
                 np.array([0. for x in range(self.sample_size)]).reshape(-1,1)
             )
         )
@@ -337,7 +371,7 @@ class ForestForTheTrees:
         arr_cum = np.cumsum(
             np.hstack(
                 (
-                    self.get_predictions_base().reshape(-1,1),
+                    self._get_predictions_base().reshape(-1,1),
                     contributions.reshape(self.sample_size,-1)
                 )
             ),
@@ -347,7 +381,7 @@ class ForestForTheTrees:
         arr_cum = np.hstack(
             (
                 arr_cum,
-                self.get_sample(self.pred_y).reshape(-1,1),
+                self._get_sample(self.pred_y).reshape(-1,1),
                 np.array([1. for x in range(self.sample_size)]).reshape(-1,1)
             )
         )
@@ -405,17 +439,17 @@ class ForestForTheTrees:
                                                           )   
         return datapoints
 
-    def copy_chart_components(self):
+    def _copy_chart_components(self):
         return copy.deepcopy(self.chart_components)  
     
-    def get_feature_pairs(self):
+    def _get_feature_pairs(self):
         return [
-            self.get_feature_pair_key(key[0], key[1])
+            self._get_feature_pair_key(key[0], key[1])
             for key in [tuple(t) for t in product(self.feature_names, repeat = 2)]
         ]       
 
-    def rollup_components(self, explanation):
-        temp_outputs = self.copy_chart_components()
+    def _rollup_components(self, explanation):
+        temp_outputs = self._copy_chart_components()
         for keyRollup in [k for k in self.chart_components.keys() if k not in explanation]:
             hUsed = False
             vUsed = False
@@ -423,7 +457,7 @@ class ForestForTheTrees:
                 if (keyRollup[1] == keyExisting[0] or keyRollup[1] == keyExisting[1]) and not hUsed:
                     hUsed = True
                     if vUsed:
-                        temp_outputs[keyExisting]["output"] = self.sum_arrays(
+                        temp_outputs[keyExisting]["output"] = self._sum_arrays(
                             temp_outputs,
                             keyExisting, 
                             keyRollup,
@@ -431,7 +465,7 @@ class ForestForTheTrees:
                         )
                         break
                     else:
-                        temp_outputs[keyExisting]["output"] = self.sum_arrays(
+                        temp_outputs[keyExisting]["output"] = self._sum_arrays(
                             temp_outputs,
                             keyExisting, 
                             keyRollup,
@@ -440,7 +474,7 @@ class ForestForTheTrees:
                 elif (keyRollup[0] == keyExisting[0] or keyRollup[0] == keyExisting[1]) and not vUsed:
                     vUsed = True
                     if hUsed:
-                        temp_outputs[keyExisting]["output"] = self.sum_arrays(
+                        temp_outputs[keyExisting]["output"] = self._sum_arrays(
                             temp_outputs,
                             keyExisting, 
                             keyRollup,
@@ -448,7 +482,7 @@ class ForestForTheTrees:
                         )                          
                         break
                     else:
-                        temp_outputs[keyExisting]["output"] = self.sum_arrays(
+                        temp_outputs[keyExisting]["output"] = self._sum_arrays(
                             temp_outputs,
                             keyExisting, 
                             keyRollup,
@@ -545,7 +579,7 @@ class ForestForTheTrees:
         self.oned_features,\
         self.estimator_texts = self._extract_components(collapse_1d, self.model.estimators_, return_text)
         
-        self.predictions_base = self.get_predictions_base()
+        self.predictions_base = self._get_predictions_base()
         
         #get the full explanation and store it. one reason for this is so that
         #charts can also be sorted appropriately
@@ -562,11 +596,11 @@ class ForestForTheTrees:
                 "predicates":[],
                 "function_texts":[]
             }
-            for key in self.get_feature_pairs()
+            for key in self._get_feature_pairs()
         }      
 
         for key, value in feature_pairs.items():
-            h, v = self.get_quantile_matrix(key[0], key[1])
+            h, v = self._get_quantile_matrix(key[0], key[1])
             value["map"] = np.array(
                 [
                     {
@@ -589,7 +623,7 @@ class ForestForTheTrees:
 
             #for 1-layer trees
             if curr_model.tree_.feature[1] < 0:
-                feature_pair_key = self.get_feature_pair_key(
+                feature_pair_key = self._get_feature_pair_key(
                     feature_ids[0]["name"],
                     feature_ids[0]["name"]
                 )
@@ -597,8 +631,8 @@ class ForestForTheTrees:
                     "feature_name": feature_ids[0]["name"],
                     "threshold": curr_model.tree_.threshold[0],
                     "operator": operator.le,
-                    "prob_le": self.get_leaf_value(curr_model.tree_, 1),
-                    "prob_gt": self.get_leaf_value(curr_model.tree_, 2)
+                    "prob_le": self._get_leaf_value(curr_model.tree_, 1),
+                    "prob_gt": self._get_leaf_value(curr_model.tree_, 2)
                 }       
                 #build the predictive function used in the decision tree
                 def dt_predicate(data_case, decision_func_dict=decision_func_dict):
@@ -612,7 +646,7 @@ class ForestForTheTrees:
             else:
                 for node_position in [1,4]: #positions for left and right nodes at layer 2
                     if node_position in feature_ids:
-                        feature_pair_key = self.get_feature_pair_key(
+                        feature_pair_key = self._get_feature_pair_key(
                             feature_ids[0]["name"], 
                             feature_ids[node_position]["name"]
                         )
@@ -626,8 +660,8 @@ class ForestForTheTrees:
                             "threshold_2": curr_model.tree_.threshold[node_position],
                             "operator_2": operator.le,
 
-                            "prob_le": self.get_leaf_value(curr_model.tree_, node_position+1),
-                            "prob_gt": self.get_leaf_value(curr_model.tree_, node_position+2)
+                            "prob_le": self._get_leaf_value(curr_model.tree_, node_position+1),
+                            "prob_gt": self._get_leaf_value(curr_model.tree_, node_position+2)
                         }
                         #build the predictive function used in the decision tree
                         def dt_predicate(data_case, decision_func_dict=decision_func_dict):
@@ -646,7 +680,7 @@ class ForestForTheTrees:
                                 return 0.
 
                     else: #asymmetric tree, this is a leaf node
-                        feature_pair_key = self.get_feature_pair_key(
+                        feature_pair_key = self._get_feature_pair_key(
                             feature_ids[0]["name"], 
                             feature_ids[0]["name"]
                         )
@@ -683,13 +717,13 @@ class ForestForTheTrees:
             if len(arrs) > 0:
                 #details of vote aggreggation method for random forest
                 #https://stats.stackexchange.com/questions/127077/random-forest-probabilistic-prediction-vs-majority-vote
-                value["output"] = np.sum(np.stack(arrs, axis=-1), axis=-1)*self.learning_rate 
+                value["output"] = np.sum(np.stack(arrs, axis=-1), axis=-1)*self.model.learning_rate 
             else:
                 value["output"] = None
 
         #build chart data
         for key, value in feature_pairs.items():
-            h,v = self.get_quantile_matrix(key[0], key[1])
+            h,v = self._get_quantile_matrix(key[0], key[1])
             value["h_indices"] = h
             value["v_indices"] = v    
 
@@ -703,7 +737,7 @@ class ForestForTheTrees:
                 value["removed"] = True
             else:          
                 if collapse_1d:
-                    if self.reduce_to_1d(value["output"], 0., "v"):
+                    if self._reduce_to_1d(value["output"], 0., "v"):
                         newKey = key[1]
                         value["output"] = value["output"][0,:]
                         value["h_indices"] = self.feature_ranges[newKey]
@@ -711,7 +745,7 @@ class ForestForTheTrees:
                         value["1d_key"] = newKey
                         value["removed"] = True
                         oned_features.append(key)                 
-                    elif self.reduce_to_1d(value["output"], 0., "h"):
+                    elif self._reduce_to_1d(value["output"], 0., "h"):
                         newKey = key[0]
                         value["output"] = value["output"][:,0]
                         value["h_indices"] = self.feature_ranges[newKey]
@@ -779,14 +813,22 @@ class ForestForTheTrees:
         } if return_text else None
         
         return chart_components, chart_indices, no_predictor_features, oned_features, function_texts
+
+    def explain(self, fidelity_threshold = 1., rollup = None):
         
+        if rollup is not None:
+            raise NotImplementedError("Rollup functionality not yet implemented.")
+        
+        self.explanation, self.explanation_components, self.evaluation_details\
+        = self._explain(fidelity_threshold, rollup)    
+    
     def _explain(self, fidelity_threshold = 1., rollup = None):
 
         explanation = []   
         explanation_components = {}
         evaluation_details = [
             {
-                "score": self.get_explanation_accuracy(
+                "score": self._get_explanation_accuracy(
                     self.predictions_base,
                     "r_squared"
                 )
@@ -801,9 +843,9 @@ class ForestForTheTrees:
             for key in keys_to_evaluate:
                 #roll up other keys
                 current_explanation = explanation+[key]
-                temp_outputs[key] = self.rollup_components(current_explanation)\
+                temp_outputs[key] = self._rollup_components(current_explanation)\
                 if rollup == "advanced"\
-                else self.copy_chart_components()
+                else self._copy_chart_components()
 
                 current_details[key] = self._evaluate_single_explanation(
                     temp_outputs[key], 
@@ -820,7 +862,7 @@ class ForestForTheTrees:
             current_details["best_key"] = best_key
 
             if rollup == "simple":
-                temp_outputs[best_key] = self.rollup_components(explanation)
+                temp_outputs[best_key] = self._rollup_components(explanation)
                 current_details[best_key] = self._evaluate_single_explanation(
                     temp_outputs[best_key], 
                     explanation,
@@ -833,22 +875,24 @@ class ForestForTheTrees:
             explanation_components = {k : self._drop_alternate_outputs(v)\
                                       for k, v in temp_outputs[best_key].items()}
         return explanation, explanation_components, evaluation_details
-    
-    def explain(self, fidelity_threshold = 1., rollup = None):
-        self.explanation, self.explanation_components, self.evaluation_details\
-        = self._explain(fidelity_threshold, rollup)
         
     def cache_visualize_components(self, start = 1, end = 100, step = 1, save_to_file = False):
         self.cache["play_components"] = []
+        
+        #prep data one time only
+        dataset = self.return_dataset_as_dataframe()
+        
         for i in range(start, end+1, step):
+            model = self.model.clone().set_params(**{"num_estimators" : i})
             ft = ForestForTheTrees(
-                dataset = self.dataset,
+                dataset = dataset,
+                model = model,
+                task = self.task,
+                target_col = self.target_col,
                 sample_size = self.sample_size,
                 num_tiles = self.num_tiles,
-                quantiles = self.quantiles,
-                learning_rate = self.learning_rate
+                quantiles = self.quantiles
             )
-            ft.build_base_model(i)
             ft.extract_components(True)
             self.cache["play_components"].append(
                 {
@@ -1031,7 +1075,7 @@ class ForestForTheTrees:
                         
                         ref_components[key]["output"].ravel().reshape(-1,1)\
                         if ref_components is not None and key in ref_components\
-                        else self.get_empty_sample(len(chart_indices[key]["h_indices"])).reshape(-1,1)
+                        else self._get_empty_sample(len(chart_indices[key]["h_indices"])).reshape(-1,1)
                     )
                 ),
                 columns = ["h_indices", "v_indices", "contributions", "ref_contributions"]
