@@ -201,6 +201,7 @@ class ForestForTheTrees:
         return prediction_contributions            
         
     def _get_coordinate_matrix(self, lst, length, direction):
+        """Expand a list out to length to create the indices for a 2d feature array"""
         if direction=="h":
             return lst*length
         else:
@@ -208,6 +209,7 @@ class ForestForTheTrees:
              for i in range(length)]   
 
     def _get_quantile_matrix(self, feat1, feat2):
+        """Get the flattened lists of indices needed to index a 2d array of 2 features"""
         h = self._get_coordinate_matrix(
             list(self.feature_ranges[feat1]),
             len(self.feature_ranges[feat2]),
@@ -221,10 +223,11 @@ class ForestForTheTrees:
         return h,v 
 
     def _get_leaf_value(self, tree, node_position):
-        node = tree.value[node_position]
-        return node        
+        """Access one node in a tree by its position"""
+        return tree.value[node_position]       
 
     def _get_feature_pair_key(self, feat1, feat2):
+        """Generate a tuple key from two features with stable sorting. Used to define chart components."""
         if self.feature_ranges[feat1].shape[0] == self.feature_ranges[feat2].shape[0]:
             #need stable order so keys with same number of quantiles appear in only one order
             return tuple(sorted([feat1, feat2]))
@@ -234,6 +237,7 @@ class ForestForTheTrees:
             return tuple([feat2, feat1])        
 
     def _get_quantiles(self, feat):
+        """For a given feature, generate the unique categories or quantitative bins"""
         loc = self.feature_locs[feat]
         if np.unique(self.x[:,loc]).shape[0] < 30 or type(self.x[0,loc]) is str: #is categorical/ordinal?
             return np.unique(self.x[:,loc])
@@ -257,6 +261,7 @@ class ForestForTheTrees:
                     ,1)  
             
     def _reduce_to_1d(self, arr, threshold, direction):
+        """Determine if the loss from reducing an array to its first column or row is below user-defined threshold"""
         if direction == "h":
             reduced_arr = arr - arr[:,0].reshape(-1,1)
         else:
@@ -264,15 +269,32 @@ class ForestForTheTrees:
         return (np.max(np.abs(reduced_arr))/np.max(np.abs(arr))) <= threshold               
         
     def _get_sample(self, arr):
+        """Get the first self.sample_size datapoints in the dataset as a sample"""
+        #NOTE: this needs to be improved to use a persistent random sample of datapoint ids instead
+        #which should be set upon initialization or whenever self.sample_size is changed
         return arr[:self.sample_size]
     
     def _get_predictions_base(self):
+        """Generate the default (estimators = 0) predictions consisting of the target mean in an array of sample_size."""
         return np.full((self.sample_size,1), np.mean(self.y))
     
     def _get_empty_sample(self, size = None):
+        """Get an array of zeroes of user-defined size."""
         return np.full((self.sample_size if size is None else size,1), 0)
     
     def _get_explanation_accuracy(self, explanation_predictions, error_metric):
+        """ Compare a list of predictions to the actual Y value and generate desired error score
+            
+            --Arguments
+            explanation_predictions (np.array):
+                Array of same length and ordering as self.y
+            error_metric (string)
+                Name of score to apply. Currently only r_squared and mae are implemented
+                
+            --Returns
+            error_metric: float
+                Score from desired error function
+        """
         if error_metric == "r_squared":
             func = r2_score
         elif error_metric == "mae":
@@ -280,9 +302,42 @@ class ForestForTheTrees:
         return func(self._get_sample(self.pred_y), explanation_predictions)
         
     def _get_prediction_contributions(self, chart, data_positions):
+        """ For a given chart/explanation component, get the prediction contribution corresponding to the bin in which a datapoint falls.
+            
+            --Arguments
+            chart: np.array:
+                A chart component or explanation component.
+                This has shape of (len(_get_quantiles(feat1)), len(_get_quantiles(feat2)))
+            data_positions: np.array
+                Array of positions to "take" from chart components, each position corresponding to the binned
+                feat1+feat2 values for one datapoint. Positions are flattened into a single value.
+                
+            --Returns
+            values: np.array
+                Array in which the value of each iten corresponds to the prediction contribution that chart
+                made for the datapoint represented at position.
+        """        
         return np.take(chart, data_positions)
     
     def _sum_arrays(self, temp_outputs, keyMain, keyAdd, arr_to_add):
+        """ Roll up an aggregated view of a chart component into a more predictive one.
+            
+            --Arguments
+            temp_outputs: dict of dict of arrays:
+                Dictionary of feature pair tuples, each with multiple outputs generated by X
+            keyMain: tuple(feat1, feat2)
+                The key of the chart to be modified
+            keyAdd: tuple(feat1, feat2)
+                The key of the chart being 'rolled up'
+            arr_to_add: string
+                The particular form of derived output to roll up, based on which feature axis is being aggregated
+                and whether the other axis was already rolled up into another chart
+                
+            --Returns
+            values: np.array
+                The updated version of temp_outputs[keyMain]['output']
+        """          
+        
         return temp_outputs[keyMain]["output"]\
     + temp_outputs[keyAdd][arr_to_add].reshape(
             temp_outputs[keyMain]["output"].shape[0]
@@ -291,9 +346,11 @@ class ForestForTheTrees:
         )
     
     def _drop_alternate_outputs(self,component):
+        """Discard output_v, output_h, etc once they have been folded into 'output' during extract_components()"""
         return {"output": component["output"]}
     
     def _get_prediction_contributions_df(self, components, explanation):
+        """Convert the prediction contributions for a set of components into a dataframe"""
         return np.hstack(
             tuple(
                 [
@@ -307,6 +364,20 @@ class ForestForTheTrees:
         )
     
     def get_prediction_contributions_by_key(self, components, explanation):
+        """ Generate prediction contributions by components of an explanation
+        for each datapoint in get_sample(self.x)
+            
+            --Arguments
+            components: dict of dict of arrays:
+                Typically, self.chart_components or self.explanation_components
+            explanation: list of feature pair tuples, ordered by importance
+                The key of the chart to be modified
+                
+            --Returns
+            values: dict of arrays
+                Dict of feature pair tuples where each value is the point-wise prediction contributions
+                for each datapoint in get_sample(self.x)
+        """
         return {
             expKey : 
             self._get_prediction_contributions(
@@ -316,6 +387,7 @@ class ForestForTheTrees:
         }
     
     def evaluate_explanation(self, error_metric = "r_squared"):
+        """Evaluate an explanation's fidelity to self.model using the provided error metric"""
         if self.task == "Regression":
             if error_metric in self.ALLOWED_REGRESSION_ERROR_METRICS: 
                 return self._evaluate_single_explanation(self.chart_components, self.explanation, error_metric)
@@ -326,7 +398,7 @@ class ForestForTheTrees:
             raise NotImplementedError("Classification not yet implemented.")
 
     def _evaluate_single_explanation(self, components, explanation, error_metric):
-        
+        """Internal version of evaluate_explanation()"""
         return self._get_explanation_accuracy(
             self.predictions_base +\
             np.sum(
@@ -344,12 +416,14 @@ class ForestForTheTrees:
         )
     
     def _get_parallel_coordinate_columns(self, explanation, cumulative):
+        """Get the list of column names for a parallel coordinates chart showing prediction contributions"""
         #make these strings because Altair doesn't like a tuple as a key and turns it into a list
         return (["mean y"] if cumulative else [])\
     + [x[0] + "," + x[1] for x in explanation]\
     + (["prediction"] if cumulative else [])
     
     def _get_altair_data_type(self,feature_name, abbreviation = True):
+        """Return the data type of a field in the format required by Altair field encodings"""
         if self.feature_ranges[feature_name].shape[0] == self.num_tiles:
             return "Q" if abbreviation else "quantitative"
         else:
@@ -440,15 +514,18 @@ class ForestForTheTrees:
         return datapoints
 
     def _copy_chart_components(self):
+        """Generate a deep copy of self.chart_components so they can be safely modified during roll-up"""
         return copy.deepcopy(self.chart_components)  
     
     def _get_feature_pairs(self):
+        """Generate the full list of feature pair keys based on the feature names of the dataset"""
         return [
             self._get_feature_pair_key(key[0], key[1])
             for key in [tuple(t) for t in product(self.feature_names, repeat = 2)]
         ]       
 
     def _rollup_components(self, explanation):
+        """ROLLUP is under development and may not function as intended"""
         temp_outputs = self._copy_chart_components()
         for keyRollup in [k for k in self.chart_components.keys() if k not in explanation]:
             hUsed = False
@@ -573,6 +650,22 @@ class ForestForTheTrees:
     
     def extract_components(self, collapse_1d = True, return_text = False):
         
+        """ Extract chart components from the underlying tree structures.
+            
+            --Arguments
+            collapse_1d: Boolean
+                If True, perform basic rollup and add 1d charts to the chart component
+                that has the highest feature importance among components that include the field in question
+            return_text: Boolean
+                If True, generate text descriptions of the function described by each tree.
+                Generally only necessary for instructional purposes, see notebook.ipynb.
+                
+            --Returns
+            None
+                Chart components, chart indices, and debugging data saved to internal state
+                See _extract_components() for more detail.
+        """          
+        
         self.chart_components,\
         self.chart_indices,\
         self.no_predictor_features,\
@@ -589,6 +682,34 @@ class ForestForTheTrees:
         
     def _extract_components(self, collapse_1d, estimators, return_text):
 
+        """ Extract chart components from the underlying tree structures.
+        Internal version of extract_components()
+            
+            --Arguments
+            collapse_1d: Boolean
+                If True, perform basic rollup and add 1d charts to the chart component
+                that has the highest feature importance among components that include the field in question
+            return_text: Boolean
+                If True, generate text descriptions of the function described by each tree.
+                Generally only necessary for instructional purposes, see notebook.ipynb.
+                
+            --Returns
+                chart_components: dict of dict of arrays
+                    Dictionary of feature pair keys with each value having output, output_v, output_h, etc
+                    Each form of output is an array of prediction contributions indexed by chart_indices
+                chart_indices: dict of dict of lists
+                    Dictionary of feature pair keys with each value having "h_indices" and "v_indices",
+                    each of which is a list containing the bins for the feature in the horizontal or vertical position
+                no_predictor_features: list of feature pair keys
+                    List of feature tuples for those pairs that were not included in any trees in the model
+                self.oned_features: list of features
+                    List of features (tuple of form (feat1, feat1)) that were rolled up
+                    If collapse_1d is False, return empty list
+                self.estimator_texts: list of strings
+                    If return_text, the string at position i in the list represents the decision function
+                    for tree i in self.mode. If False, return empty list.
+        """         
+        
         #generate data structure for pairwise charts
         feature_pairs = {
             key : {
@@ -815,7 +936,10 @@ class ForestForTheTrees:
         return chart_components, chart_indices, no_predictor_features, oned_features, function_texts
 
     def explain(self, fidelity_threshold = 1., rollup = None):
-        
+        """Generate an explanation for a model consisting of a subset of self.chart_components
+        with r_squared greater than or equal to fidelity_threshold
+        """
+        #NOTE: should be able to pass error_metric here along with fidelity_threshold
         if rollup is not None:
             raise NotImplementedError("Rollup functionality not yet implemented.")
         
@@ -1027,6 +1151,9 @@ class ForestForTheTrees:
         return chart
         
     def visualize_components(self, plot_points = True, chart_size = 150):
+        """Generate a visualization consisting of a heatmap for each self.explanation_component
+        if explain() has been called, or for each self.chart_component otherwise
+        """
         if len(self.explanation) > 0:
             explanation_to_visualize = self.explanation
             components = self.explanation_components
