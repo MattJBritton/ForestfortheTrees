@@ -175,9 +175,14 @@ class ForestForTheTrees:
             dataLoad = dataLoad.rename(mapper=feature_names_dict,axis=1) 
             return dataLoad.loc[:, list(feature_names_dict.values()) + ["Ridership"]]
         
+    def get_series_as_array(self, ser):
+        return np.array(ser).reshape(-1,1)
+        
     def return_dataset_as_dataframe(self):
         """Construct dataframe from internal NumPy data representation"""
-        return pd.DataFrame(data = np.hstack(self.x, self.y), columns = features + [target_col])
+        return pd.DataFrame(data = np.hstack((self.x, self.get_series_as_array(self.y))),
+                            columns = self.feature_names + [self.target_col] 
+                           )
 
     def _bin_data(self):
     
@@ -282,7 +287,7 @@ class ForestForTheTrees:
         """Get an array of zeroes of user-defined size."""
         return np.full((self.sample_size if size is None else size,1), 0)
     
-    def _get_explanation_accuracy(self, explanation_predictions, error_metric):
+    def _get_explanation_accuracy(self, explanation_predictions, error_metric, subset_indices = None):
         """ Compare a list of predictions to the actual Y value and generate desired error score
             
             --Arguments
@@ -299,7 +304,11 @@ class ForestForTheTrees:
             func = r2_score
         elif error_metric == "mae":
             func = mean_absolute_error
-        return func(self._get_sample(self.pred_y), explanation_predictions)
+            
+        if subset_indices is not None:
+            return func(self.pred_y[subset_indices], explanation_predictions[subset_indices])
+        else:
+            return func(self._get_sample(self.pred_y), explanation_predictions)
         
     def _get_prediction_contributions(self, chart, data_positions):
         """ For a given chart/explanation component, get the prediction contribution corresponding to the bin in which a datapoint falls.
@@ -387,7 +396,17 @@ class ForestForTheTrees:
         }
     
     def evaluate_explanation(self, error_metric = "r_squared"):
-        """Evaluate an explanation's fidelity to self.model using the provided error metric"""
+        """Evaluate an explanation's fidelity to self.model using the provided error metric
+            
+            --Arguments
+            error_metric: String
+                The error metric by which to evaluate the explanation's fidelity
+                to the model. Currently, only "r_squared" is accepted.
+                
+            --Returns
+            fidelity: Float
+                Depends on the definition of the error metric. R-squared is a float from -inf => 1.
+        """        
         if self.task == "Regression":
             if error_metric in self.ALLOWED_REGRESSION_ERROR_METRICS: 
                 return self._evaluate_single_explanation(self.chart_components, self.explanation, error_metric)
@@ -397,8 +416,24 @@ class ForestForTheTrees:
         elif self.task == "Classification":
             raise NotImplementedError("Classification not yet implemented.")
 
-    def _evaluate_single_explanation(self, components, explanation, error_metric):
-        """Internal version of evaluate_explanation()"""
+    def _evaluate_single_explanation(self, components, explanation, error_metric, subset_indices = None):
+        """Internal version of evaluate_explanation()
+            
+            --Arguments
+            components: dict of dict of arrays
+                    Dictionary of feature pair keys with each value having output, output_v, output_h, etc
+                    Each form of output is an array of prediction contributions indexed by chart_indices              
+            explanation: List
+                List of feature pair keys specifying an explanation. Typically from self.explanation or self.base_explanation
+            error_metric: String
+                The error metric by which to evaluate the explanation's fidelity
+                to the model. Currently, only "r_squared" is accepted.
+                
+            --Returns
+            fidelity: Float
+                Depends on the definition of the error metric. R-squared is a float where -inf < x <= 1.
+        """        
+        
         return self._get_explanation_accuracy(
             self.predictions_base +\
             np.sum(
@@ -412,24 +447,71 @@ class ForestForTheTrees:
                 ), 
                 axis = 0
             ).reshape(-1,1),
-            error_metric
+            error_metric,
+            subset_indices
         )
     
     def _get_parallel_coordinate_columns(self, explanation, cumulative):
-        """Get the list of column names for a parallel coordinates chart showing prediction contributions"""
+        
+        """Get the list of column names for a parallel coordinates chart showing prediction contributions
+            
+            --Arguments           
+            explanation: List
+                List of feature pair keys specifying an explanation. Typically from self.explanation or self.base_explanation
+            cumulative: Boolean
+                Whether the parallel coordinates chart calling this displays cumulative predictions or individual 
+                prediction components. Controls whether "mean y" and "prediction" are added to the output
+                
+            --Returns
+            column_names: List
+                List of stringified column names for Altair to use in the chart generated by visualize_datapoints()
+        """         
+        
         #make these strings because Altair doesn't like a tuple as a key and turns it into a list
         return (["mean y"] if cumulative else [])\
     + [x[0] + "," + x[1] for x in explanation]\
     + (["prediction"] if cumulative else [])
     
-    def _get_altair_data_type(self,feature_name, abbreviation = True):
-        """Return the data type of a field in the format required by Altair field encodings"""
-        if self.feature_ranges[feature_name].shape[0] == self.num_tiles:
+    def _get_altair_data_type(self, feature_name, abbreviation = True):
+        
+        """Return the data type of a field in the format required by Altair field encodings
+            
+            --Arguments           
+            feature_name: String
+                Name of a valid feature in this dataset.
+            abbreviation: Boolean
+                Whether to return the data type as the full Altair name or the abbreviated form
+                
+            --Returns
+            data_type: String
+                Name or abbreviation of the feature's data type
+        """          
+        if feature_name not in self.feature_ranges:
+            raise ValueError("Feature is not present in dataset. Check f2t.feature_ranges()")
+        elif self.feature_ranges[feature_name].shape[0] == self.num_tiles:
             return "Q" if abbreviation else "quantitative"
         else:
             return "O" if abbreviation else "ordinal"    
     
     def _get_datapoint_contributions(self, components, explanation):
+        
+        """Build the data structure for the chart generated by visualize_datapoints().
+        This is basically the result of _get_prediction_contributions_df() with additional columns
+        for prediction loss, sorting, etc. 
+            
+            --Arguments
+            components: dict of dict of arrays
+                    Dictionary of feature pair keys with each value having output, output_v, output_h, etc
+                    Each form of output is an array of prediction contributions indexed by chart_indices              
+            explanation: List
+                List of feature pair keys specifying an explanation. Typically from self.explanation or self.base_explanation
+                
+            --Returns
+            datapoints: pandas.DataFrame
+                Dataframe with one row per datapoint, and columns for each feature pair key indicating their contribution
+                to the prediction, with additional columns for sort order, prediction, mean_y, and explanation_loss.
+        """ 
+        
         contributions = self._get_prediction_contributions_df(components, explanation)
         #raw contributions
         arr = np.hstack(
@@ -487,7 +569,6 @@ class ForestForTheTrees:
             datapoints.loc[:,"prediction"] - datapoints.iloc[:,-3]#last cumulative column
         )
         
-        #datapoints = datapoints.reset_index(drop = False)
         datapoints["prediction_index"] = datapoints["prediction"]
         datapoints = datapoints.melt(
             id_vars = ['index', "prediction_index", "view", "explanation_loss"],
@@ -570,6 +651,24 @@ class ForestForTheTrees:
     def visualize_estimator(self, estimator_nums, try_collapse = False,
                             print_function_text = True, auto_display = True):
         
+        """Visualize the chart components for 1 or more individual estimators within a model.
+            
+            --Arguments
+            estimator_nums: Integer or List
+                The list of estimators to visualize. Represents the index of the tree in model.estimators_
+            try_collapse: Boolean
+                If true, collapse as many of the estimators if possible, if they share the same feature pair key.
+            print_function_text: Boolean
+                If true, print the text of the decision function specified by the tree on top of the chart.
+            auto_display: Boolean
+                If true, display the chart. Otherwise, just return it for manual alteration and display   
+                
+            --Returns
+            output: Altair.chart
+                Returns the Altair visualization spec for further modification if necessary.
+                If auto_display = True, this can be discarded.
+        """         
+        
         estimators = [self.model.estimators_[estimator_nums]] if type(estimator_nums) is int\
         else [x for i,x in enumerate(self.model.estimators_) if i in estimator_nums] 
         
@@ -594,9 +693,10 @@ class ForestForTheTrees:
         chart = self._visualize_components(
             chart_components.keys(),
             chart_components,
-            None,
             chart_indices,
-            False, 
+            None, 
+            None,
+            None,
             300,
             4
         )
@@ -605,6 +705,17 @@ class ForestForTheTrees:
         return chart
     
     def _get_function_text(self, decision_func_dict):
+        
+        """Convert the internal representation of a tree into a natural language if-then statement of the decision function.
+            
+            --Arguments
+            decision_func_dict: Dict
+                The representation of an estimator used in _extract_components(). See that function for more details.
+                
+            --Returns
+            text: String
+                Decision function for the passed estimator as an if-then statement.
+        """          
         
         def _get_left_right_text(op, le, gt):
             if op == operator.le:
@@ -935,19 +1046,77 @@ class ForestForTheTrees:
         
         return chart_components, chart_indices, no_predictor_features, oned_features, function_texts
 
-    def explain(self, fidelity_threshold = 1., rollup = None):
+    def explain(self, fidelity_threshold = 1., rollup = None, subset_definition = None):
         """Generate an explanation for a model consisting of a subset of self.chart_components
         with r_squared greater than or equal to fidelity_threshold
-        """
+
+            --Arguments
+            fidelity_threshold: Float
+                Float between 0 and 1. Stop adding chart components and return when r_squared is greater than or equal to
+                this value
+            rollup: String
+                Not Implemented. https://github.com/MattJBritton/ForestfortheTrees/issues/7
+            subset_definition: String
+                If value is not None, then acts as a predicate to filter the data and generate an explanation
+                for that subset. Note that this does not re-train the model or re-build chart components, but
+                just generates an explanation that works best for that subset. The query should be passed
+                in the format accepted by the Pandas 'where()' function, e.g. 'colA == 3 & colB == colC'
+                for more info see https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.query.html
+                If value is None then generate an explanation for the whole dataset
+                
+            --Returns
+            None
+                Explanation, chart components, and debugging data saved to internal state
+                See _explain() for more detail.
+        """           
+        
         #NOTE: should be able to pass error_metric here along with fidelity_threshold
         if rollup is not None:
             raise NotImplementedError("Rollup functionality not yet implemented.")
+            
+        try:
+            if subset_definition is not None:
+                subset_indices = self.return_dataset_as_dataframe().query(subset_definition).index
+                if len(subset_indices) == 0:
+                    raise ValueError("Subset_definition produced empty query.")
+            else:
+                subset_indices = range(len(self.x))
+        except:
+            raise ValueError("Subset_definition is not a valid predicate.")
         
         self.explanation, self.explanation_components, self.evaluation_details\
-        = self._explain(fidelity_threshold, rollup)    
+        = self._explain(fidelity_threshold, rollup, subset_indices)    
     
-    def _explain(self, fidelity_threshold = 1., rollup = None):
+    def _explain(self, fidelity_threshold = 1., rollup = None, subset_indices = None):
 
+        """Generate an explanation for a model consisting of a subset of self.chart_components
+        with r_squared greater than or equal to fidelity_threshold
+
+            --Arguments
+            fidelity_threshold: Float
+                Float between 0 and 1. Stop adding chart components and return when r_squared is greater than or equal to
+                this value
+            rollup: String
+                Not Implemented. https://github.com/MattJBritton/ForestfortheTrees/issues/7
+            subset_indices: list or None
+                If value is not None, then filter the set of points for which explanations are evaluated.
+                Typically generated by the 'subset_definition' argument passed to 'explain()'
+                If value is None then do not use and generate an explanation for the whole dataset
+                
+            --Returns           
+            explanation: list of strings
+                List of component names in the explanation, in descending order of importance
+            explanation_components: dict of dict of arrays
+                    Dictionary of feature pair keys with each value having output, output_v, output_h, etc
+                    Each form of output is an array of prediction contributions indexed by chart_indices
+            evaluation_details: list of dicts
+                Each element in the list contains the details for one iteration of the greedy search algorithm.
+                Each of these elements is a dictionary where the keys are feature pair names, and the correponding value
+                is the r-squared when that component was selected at this position.
+                Each dict also contains the score of the best feature pair, and the best feature pair itself.
+                Primary use is to debug the rollup feature
+        """        
+        
         explanation = []   
         explanation_components = {}
         evaluation_details = [
@@ -974,7 +1143,8 @@ class ForestForTheTrees:
                 current_details[key] = self._evaluate_single_explanation(
                     temp_outputs[key], 
                     current_explanation,
-                    "r_squared"
+                    "r_squared",
+                    subset_indices
                 )
 
             #get key with highest fidelity score
@@ -990,7 +1160,8 @@ class ForestForTheTrees:
                 current_details[best_key] = self._evaluate_single_explanation(
                     temp_outputs[best_key], 
                     explanation,
-                    "r_squared"
+                    "r_squared",
+                    subset_indices
                 )
 
             
@@ -1001,6 +1172,29 @@ class ForestForTheTrees:
         return explanation, explanation_components, evaluation_details
         
     def cache_visualize_components(self, start = 1, end = 100, step = 1, save_to_file = False):
+        
+        """Cache the set of components for each model as trees are added from {start} to {end} number of trees.
+        This generates the frames of a "movie" that can be played with play_components(). Caching is not required but
+        speeds up playback considerably.
+
+            --Arguments
+            start: Integer
+                The number of trees at which to start model playback caching
+            end: Integer
+                The number of trees at which to start model playback caching. Start and end define the length of the movie.
+            step: Positive Integer
+                How to step between {start} and {end}. If 1, view every step in the model-building process.
+            save_to_file: Boolean
+                If true, save the pickled components in the 'notebook_resources' folder.
+                Regardless of this value, the components are always stored in the library's internal state
+                
+            --Returns           
+            None
+                Explanation, chart components, and debugging data saved to internal state
+                See extract_components() for more detail.
+        """        
+        
+        
         self.cache["play_components"] = []
         
         #prep data one time only
@@ -1035,6 +1229,20 @@ class ForestForTheTrees:
         
     def cache_visualize_datapoints(self, save_to_file = False):
         
+        """Cache the minimal and full dataset contribtions for the visualize_datapoints() method.
+        This is not required but speeds rendering and interactivity.
+
+            --Arguments
+            save_to_file: Boolean
+                If true, save the pickled components in the 'notebook_resources' folder.
+                Regardless of this value, the components are always stored in the library's internal state
+                
+            --Returns           
+            None
+                Datapoint contributions saved to internal state
+                See _get_datapoint_contributions() for more detail.
+        """        
+        
         minimal = self._get_datapoint_contributions(
             self.explanation_components,
             self.explanation
@@ -1054,6 +1262,21 @@ class ForestForTheTrees:
             self.cache["datapoints"].to_csv("notebook_resources/cache_visualize_datapoints.csv")
             
     def load_cache_from_file(self):
+        
+        """Loads the results of prior runs of cache_visualize_components() and cache_visualization_datapoints()
+        Sample verions for the bike dataset are downloaded with the library, but must be generated for
+        other datasets and models.
+        Note that this method only need to be called if the ForestForTheTrees object was cleared after the above methods
+        were run.
+
+            --Arguments
+            None
+                
+            --Returns           
+            None
+                Loaded cache data saved to internal state
+                See _cache_visualize_components() and _cache_visualize_datapoints() for more detail.
+        """            
         try:
             self.cache["datapoints"] = pd.read_csv("notebook_resources/cache_visualize_datapoints.csv")
         except:
@@ -1063,15 +1286,74 @@ class ForestForTheTrees:
                 self.cache["play_components"] = pickle.load(input_file, encoding='latin1')        
         except:
             pass
+        
+    def play_components(self, cache_id, auto_display = True):
+        
+        """Generate one frame of the "movie" showing how the explanation (output of visualize_components())
+        changes as a tree is built. Frames are loaded from the cache, which is set by cache_visualize_components().
+
+            --Arguments
+            cache_id: Positive Integer
+                The component to pull from the cache. Cache_id - 1 corresponds to the number of trees in the model
+                at that stage of building.
+            auto_display: Boolean
+                If true, display the chart. Otherwise, just return it for manual alteration and display            
+                
+            --Returns           
+            output: Altair.chart
+                Returns the Altair visualization spec for further modification if necessary.
+                If auto_display = True, this can be discarded.
+        """ 
+        
+        output = self._visualize_components(
+            #-1 deals with the fact that list is zero-based but number of trees starts at 1
+            self.cache["play_components"][cache_id-1]["explanation"],
+            self.cache["play_components"][cache_id-1]["components"],
+            self.cache["play_components"][cache_id-1]["chart_indices"],
+            None,
+            self.cache["play_components"][cache_id-2]["components"] if cache_id > 1 else None,
+            0.05,
+            100,
+            6
+        )
+        if auto_display:
+            display(output)
+        return output        
             
     def visualize_datapoints(self, cumulative = False, num_datapoints = 50, explanation_type = "minimal",
                             color_encoding = "prediction", auto_display = True):
-        output = self._visualize_datapoints(explanation_type, cumulative, num_datapoints, color_encoding)
+        
+        """Generate a line chart showing how the extracted components assemble a prediction for selected datapoints.
+
+            --Arguments
+            cumulative: Boolean
+                If true, then the line chart sums predictions from each component, approaching the base model's prediction.
+                Otherwise, each value of the line chart is the individual contribution of a contribution for that datapoint.
+            num_datapoints: Positive Integer
+                Number of datapoints to visualize (randomly selected from self.x)
+            explanation_type: String
+                If "minimal", then only use the components generated from the most recent run of explain().
+                If "full", then use all components generated from the base model.
+            color_encoding: String
+                Pass the name of a feature (or "prediction" for the base model's prediction) which will be used
+                as the color encoding for this chart. Lines will be colored based on this value
+            auto_display: Boolean
+                If true, display the chart. Otherwise, just return it for manual alteration and display.
+                
+            --Returns           
+            output: Altair.chart
+                Returns the Altair visualization spec for further modification if necessary.
+                If auto_display = True, this can be discarded
+        """        
+        output = self._visualize_datapoints(cumulative, num_datapoints, explanation_type, color_encoding)
         if auto_display:
             display(output)
         return output
     
-    def _visualize_datapoints(self, explanation_type, cumulative, num_datapoints, color_encoding):
+    def _visualize_datapoints(self, cumulative, num_datapoints, explanation_type, color_encoding):
+        
+        """See visualize_datapoints() above.
+        """
         
         explanation_to_visualize = self.explanation\
         if len(self.explanation) > 0 and explanation_type == "minimal"\
@@ -1149,11 +1431,36 @@ class ForestForTheTrees:
         )
         
         return chart
+    
+        """
+        .configure_axis(
+            labelColor = "white",
+            tickColor = "white",
+            titleColor = "white",
+            grid = False
+        ).configure_legend(
+            labelColor = "white",
+            titleColor = "white"
+        )"""
         
-    def visualize_components(self, plot_points = True, chart_size = 150):
+    def visualize_components(self, plot_points = None, chart_size = 150, charts_per_row = 4):
+        
         """Generate a visualization consisting of a heatmap for each self.explanation_component
         if explain() has been called, or for each self.chart_component otherwise
-        """
+
+            --Arguments
+            plot_points: Positive Integer or None
+                If not None, select a random sample of this size of data points and overlay
+                on each chart to indicate distribution.
+            chart_size: Positive Integer
+                Width and height of output chart in pixels
+            charts_per_row : Positive Integer
+                Number of charts to display in each row                
+                
+            --Returns           
+            output: Altair.chart
+                Returns the Altair visualization spec for further modification if necessary.
+        """         
         if len(self.explanation) > 0:
             explanation_to_visualize = self.explanation
             components = self.explanation_components
@@ -1163,29 +1470,48 @@ class ForestForTheTrees:
         return self._visualize_components(
             explanation_to_visualize,
             components,
-            None,
             self.chart_indices,
             plot_points,
+            None,
+            None,
             chart_size,
-            4
+            charts_per_row
         )
-    
-    def play_components(self, cache_id):
-        output = self._visualize_components(
-            #-1 deals with the fact that list is zero-based but number of trees starts at 1
-            self.cache["play_components"][cache_id-1]["explanation"],
-            self.cache["play_components"][cache_id-1]["components"],
-            self.cache["play_components"][cache_id-2]["components"] if cache_id > 1 else None,
-            self.cache["play_components"][cache_id-1]["chart_indices"],
-            False,
-            100,
-            6
-        )
-        display(output)
-        return output
         
-    def _visualize_components(self, explanation, components, ref_components, chart_indices,
-                              plot_points, chart_size, charts_per_row):
+    def _visualize_components(self, explanation, components, chart_indices,
+                              plot_points, ref_components, ref_components_threshold, chart_size, charts_per_row):
+        
+        """Generate a visualization consisting of a heatmap for the passed components in the passed explanation
+
+            --Arguments
+            explanation: List
+                List of feature pair keys specifying an explanation. Typically from self.explanation or self.base_explanation
+            components: dict of dict of arrays
+                    Dictionary of feature pair keys with each value having output, output_v, output_h, etc
+                    Each form of output is an array of prediction contributions indexed by chart_indices
+            chart_indices: dict of dict of lists
+                Dictionary of feature pair keys with each value having "h_indices" and "v_indices",
+                each of which is a list containing the bins for the feature in the horizontal or vertical position.
+                See explain() for more details.
+            plot_points: Positive Integer or None
+                If not None, select a random sample of this size of data points and overlay
+                on each chart to indicate distribution.
+            ref_components: dict of dict of lists
+                Same format as components. If not None, then compare to components as display a mark in each cell that has
+                changed by more than {ref_components_threshold}. Plot_points takes precedence over this if both are set.
+            ref_components_threshold: Float
+                Float between 0 and 1. Indicates the percentage change required for a square of the heatmap to register
+                as changed when compared to {ref_components}. Default is 5% threshold = 0.05.
+                If {ref_components} is None, then ignore this value.
+            chart_size: Positive Integer
+                Width and height of output chart in pixels
+            charts_per_row : Positive Integer
+                Number of charts to display in each row
+                
+            --Returns           
+            output: Altair.chart
+                Returns the Altair visualization spec for further modification if necessary.
+        """         
         i = 1
         rows = []
         charts = []
@@ -1211,7 +1537,8 @@ class ForestForTheTrees:
             #figure out cells that should be highlighted
             chart_df["is_changed"]\
             = chart_df.apply(lambda x:
-                             abs(x["ref_contributions"] - x["contributions"])/abs(x["contributions"]+0.001) > 0.05\
+                             abs(x["ref_contributions"] - x["contributions"])\
+                                 /abs(x["contributions"]+0.001) > ref_components_threshold\
                              or (x["contributions"] != 0. and key not in ref_components)#new chart this step
                              if ref_components is not None else False,
                              axis = 1
@@ -1248,6 +1575,10 @@ class ForestForTheTrees:
                 legend = alt.Legend(title = "Votes")
             )
             
+#             size_encoding = alt.Size(
+#                 field = 
+#             )
+            
             tooltip_encoding = [
                 alt.Tooltip('h_indices:O', title = key[0]),
                 alt.Tooltip('v_indices:O', title = key[1] if key[1] != key[0] else "same"),
@@ -1260,14 +1591,15 @@ class ForestForTheTrees:
                 x = x_encoding, 
                 y = y_encoding, 
                 color = color_encoding,
+                #size = size_encoding,
                 tooltip = tooltip_encoding
             ).properties(
                 width = chart_size, 
                 height = chart_size
             )
 
-            if plot_points:
-                point_df = pd.DataFrame(self.x[np.random.choice(self.x.shape[0],500,replace = False),:],\
+            if plot_points is not None:
+                point_df = pd.DataFrame(self.x[np.random.choice(self.x.shape[0], plot_points, replace = False),:],\
                                   columns = self.feature_names)
                 points = alt.Chart(point_df).mark_circle(
                     color = 'black',
@@ -1296,6 +1628,17 @@ class ForestForTheTrees:
             i += 1
             
         output = alt.vconcat(*rows).configure_scale(
-                bandPaddingInner = 0
-            )
+            bandPaddingInner = 0
+        )
+        #dark mode
+        """.configure_axis(
+            labelColor = "white",
+            tickColor = "white",
+            titleColor = "white",
+            grid = False
+        ).configure_legend(
+            labelColor = "white",
+            titleColor = "white"
+        )"""
+
         return output

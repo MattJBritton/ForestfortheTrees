@@ -27,19 +27,19 @@ target_column = "Target"  #the value to predict
 
 #build model
 model = GradientBoostingRegressor(
-    num_estimators = 100
+    n_estimators = 100
 )
 
 #fit model
 model.fit(
     dataset_df.drop(target_column, axis = 1),
-    dataset.loc[:,target_column]
+    dataset_df.loc[:,target_column]
 ) #you should build a good model here using train/test split
 
 #initialize ForestForTheTrees with dataset, model, and target
 f2t = ft.ForestForTheTrees(
     dataset = dataset_df, #pass bike instead to use the sample dataset
-    model = None,
+    model = model,
     target_col = "Ridership"
 )
 
