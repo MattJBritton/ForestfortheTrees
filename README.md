@@ -1,7 +1,12 @@
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/MattJBritton/ForestfortheTrees/master?urlpath=lab/tree/notebook.ipynb)
 
 # ForestfortheTrees
-This library provides utilities for generating visual explanations of Gradient Boosting models. I recommend you jump in through the Binder link above, which renders the notebook.ipynb file. This interactive Jupyter notebook is an [Explainable](https://explorabl.es/) that showcases the value of the library and provides sample code.
+
+![5-chart explanation for bike dataset](https://github.com/MattJBritton/ForestfortheTrees/blob/master/readme_resources/5_chart_explanation.png "5 chart explanation for bike dataset")
+
+This library provides utilities for generating visual explanations of Gradient Boosting models. I recommend you jump in through the Binder link above, which renders the notebook.ipynb file. This interactive Jupyter notebook is an [Explainable](https://explorabl.es/) that showcases the value of the library and provides sample code. 
+
+You can see more of my work on my [website](https://www.mattbritton.info/), or check out the [presentation](https://www.mattbritton.info/forestforthetrees) I gave at [VISxAI 2019](http://visxai.io/). My presentation even got mentioned in [Uncharted's VIS 2019 Highlights](https://uncharted.software/blog/highlights-from-ieee-vis-2019/)!
 
 ## Installation
 
@@ -52,7 +57,8 @@ f2t.explain(
     fidelity_threshold = .95
 )
 ```
-![5-chart explanation for bike dataset](https://github.com/MattJBritton/ForestfortheTrees/blob/master/readme_resources/5_chart_explanation.png "5 chart explanation for bike dataset")
+
+![GIF of user exploring individual trees](https://github.com/MattJBritton/ForestfortheTrees/blob/master/readme_resources/individual_trees_interaction.gif "GIF of user exploring individual trees")
 
 ## Development
 This library is under active development - please review the [Issues](https://github.com/MattJBritton/ForestfortheTrees/issues) tab for current priorities. Feature requests and bug reports are welcomed! If you find this library useful, please feel free to message me and let me know how it went. 
