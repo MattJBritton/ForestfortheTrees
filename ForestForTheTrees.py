@@ -75,8 +75,9 @@ class ForestForTheTrees:
         self.mean_prediction = None
         self.no_predictor_features = []
         self.oned_features = []   
-        self.binned_data = None
-        self.sample_size = sample_size #may be set to none here, will be handled in load_dataset()
+        self.binned_data = {}
+        self.distributions = {}
+        self.sample_size = sample_size #may be set to none here, will be set to len(self.x) after dataset loaded below
         self.num_tiles = num_tiles
         self.quantiles = quantiles
         self.predictions_base = None
@@ -107,7 +108,9 @@ class ForestForTheTrees:
         } 
         if self.sample_size is None: #if no sample size use whole dataset
             self.sample_size = self.x.shape[0]
-        self.binned_data = self._bin_data() 
+        
+        #now that sample size is set, bin data according to feature ranges
+        self._bin_data() 
         
         #if no model passed, instantiate one with default settings
         if self.model is None:
@@ -176,6 +179,7 @@ class ForestForTheTrees:
             return dataLoad.loc[:, list(feature_names_dict.values()) + ["Ridership"]]
         
     def get_series_as_array(self, ser):
+        """Utility function to return a 1-d series as an array with dimensions = (len(series), 1)"""
         return np.array(ser).reshape(-1,1)
         
     def return_dataset_as_dataframe(self):
@@ -186,24 +190,35 @@ class ForestForTheTrees:
 
     def _bin_data(self):
     
-        """For each pair of features in the dataset, generate an array of bin values in an X/Y grid."""
+        """For each feature and pair of features in the dataset, 
+        generate an array of bin values, and the histogram of data occurrences
+        according to those bins."""
     
-        prediction_contributions = {}
+        self.binned_data = {}
+        self.distributions = {}
         sample_data = pd.DataFrame(
             self._get_sample(self.x),
             columns = self.feature_names
         )
+        #do 1-d data bins and distributions first
+        for key in self.feature_names:
+            self.binned_data[key] = np.digitize(
+                sample_data.loc[:,key],
+                self.feature_ranges[key]
+            )-1.
+            unique, counts = np.unique(self.binned_data[key], return_counts=True)
+            hist_dict = dict(zip(unique, counts))
+            self.distributions[key] = [hist_dict.get(x,0) for x in range(len(self.feature_ranges[key]))]
+            
         for key in self._get_feature_pairs():
-            tempH = np.digitize(
-                sample_data.loc[:,key[0]],
-                self.feature_ranges[key[0]]
-            )-1.
-            tempV = np.digitize(
-                sample_data.loc[:,key[1]],
-                self.feature_ranges[key[1]]
-            )-1.
-            prediction_contributions[key] = (tempV*len(self.feature_ranges[key[0]]) + tempH).astype(int)
-        return prediction_contributions            
+            self.binned_data[key] = (
+                self.binned_data[key[1]]*len(self.feature_ranges[key[0]])
+                + self.binned_data[key[0]]
+            ).astype(int)
+            unique, counts = np.unique(self.binned_data[key], return_counts=True)
+            hist_dict = dict(zip(unique, counts))
+            self.distributions[key] = [hist_dict.get(x,0) for x in\
+                                       range(len(self.feature_ranges[key[0]]) * len(self.feature_ranges[key[1]]))]            
         
     def _get_coordinate_matrix(self, lst, length, direction):
         """Expand a list out to length to create the indices for a 2d feature array"""
@@ -1525,13 +1540,14 @@ class ForestForTheTrees:
                         np.array(chart_indices[key]["h_indices"]).reshape(-1,1),
                         np.array(chart_indices[key]["v_indices"]).reshape(-1,1),
                         components[key]["output"].ravel().reshape(-1,1),
+                        np.array(self.distributions[key]).reshape(-1,1),
                         
                         ref_components[key]["output"].ravel().reshape(-1,1)\
                         if ref_components is not None and key in ref_components\
                         else self._get_empty_sample(len(chart_indices[key]["h_indices"])).reshape(-1,1)
                     )
                 ),
-                columns = ["h_indices", "v_indices", "contributions", "ref_contributions"]
+                columns = ["h_indices", "v_indices", "contributions", "distributions", "ref_contributions"]
             )
             
             #figure out cells that should be highlighted
@@ -1575,9 +1591,12 @@ class ForestForTheTrees:
                 legend = alt.Legend(title = "Votes")
             )
             
-#             size_encoding = alt.Size(
-#                 field = 
-#             )
+            size_encoding = alt.Size(
+                field = "distributions",
+                type = "quantitative",
+                scale = alt.Scale(type = "symlog"),
+                legend = None
+            )
             
             tooltip_encoding = [
                 alt.Tooltip('h_indices:O', title = key[0]),
@@ -1585,13 +1604,13 @@ class ForestForTheTrees:
                 alt.Tooltip("contributions:Q", title = "Contribution")
             ]
 
-            chart = alt.Chart(data = chart_df).mark_rect()
+            chart = alt.Chart(data = chart_df).mark_circle()
 
             chart = chart.encode(
                 x = x_encoding, 
                 y = y_encoding, 
                 color = color_encoding,
-                #size = size_encoding,
+                size = size_encoding,
                 tooltip = tooltip_encoding
             ).properties(
                 width = chart_size, 
